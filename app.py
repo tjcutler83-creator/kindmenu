@@ -11,44 +11,25 @@ stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
 # In-memory token storage for access control
 VALID_TOKENS = set()
 
-
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-SYSTEM_PROMPT = """
-You are a friendly, empathetic café pricing assistant.
+# -----------------------------
+# ROUTES
+# -----------------------------
 
-Your job is to help independent café owners adjust menu prices in a fair, calm, non-judgmental way.
-
-Rules:
-- Use warm, human language
-- Never sound corporate or aggressive
-- Assume the owner cares deeply about customers
-- Avoid guilt or pressure
-- Be reassuring
-
-Tasks:
-1. Identify items with low margins based on provided costs and prices
-2. Suggest sensible price increases that:
-   - Are small where possible
-   - Use café-friendly rounding (.00, .50, .90)
-   - Prioritise high-volume items like coffee
-3. Explain why each change makes sense in plain English
-4. Generate a short customer-facing explanation they can copy and paste
-5. Generate simple staff talking points
-
-Tone:
-- Calm
-- Kind
-- Practical
-- Supportive
-"""
 @app.route("/")
 def home():
     return send_from_directory(".", "index.html")
 
+
 @app.route("/generate", methods=["POST"])
 def generate():
-    menu_text = request.json.get("menu")
+    data = request.json
+    menu_text = data.get("menu")
+    token = data.get("token")  # user must submit the access token
+
+    if token not in VALID_TOKENS:
+        return jsonify({"error": "payment_required"}), 402
 
     response = openai.ChatCompletion.create(
         model="gpt-4o-mini",
@@ -59,10 +40,50 @@ def generate():
         temperature=0.4
     )
 
-    return jsonify({
-        "result": response.choices[0].message.content
-    })
+    return jsonify({"result": response.choices[0].message.content})
 
+
+@app.route("/checkout/<plan>")
+def checkout(plan):
+    price_id = os.getenv("PRICE_MONTHLY") if plan == "monthly" else os.getenv("PRICE_YEARLY")
+
+    session = stripe.checkout.Session.create(
+        payment_method_types=["card"],
+        mode="subscription",
+        line_items=[{"price": price_id, "quantity": 1}],
+        success_url=request.host_url + "success",
+        cancel_url=request.host_url + "cancel"
+    )
+
+    return redirect(session.url, code=303)
+
+
+@app.route("/success")
+def success():
+    token = os.urandom(8).hex()
+    VALID_TOKENS.add(token)
+
+    return f"""
+    <h2>You're all set ☕</h2>
+    <p>Your access code:</p>
+    <pre>{token}</pre>
+    <p>Paste this into KindMenu to unlock it.</p>
+    """
+
+
+@app.route("/cancel")
+def cancel():
+    return "<h2>Payment cancelled 😕</h2><p>You can try again anytime.</p>"
+
+
+# -----------------------------
+# RUN SERVER
+# -----------------------------
 if __name__ == "__main__":
-    app.run()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
+
+   
+    
 
