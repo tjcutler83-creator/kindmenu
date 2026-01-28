@@ -1,12 +1,16 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect, send_from_directory
+import stripe
 import openai
 import os
-from flask import Flask, request, jsonify, send_from_directory
-import openai
-import os
-
 
 app = Flask(__name__)
+
+# Stripe configuration
+stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
+
+# In-memory token storage for access control
+VALID_TOKENS = set()
+
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -61,3 +65,4 @@ def generate():
 
 if __name__ == "__main__":
     app.run()
+
