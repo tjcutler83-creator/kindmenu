@@ -5,32 +5,45 @@ import os
 
 app = Flask(__name__)
 
-# Stripe configuration
+# -----------------------------
+# CONFIGURATION
+# -----------------------------
+# Stripe
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
 
-# In-memory token storage for access control
+# OpenAI
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+
+# Token storage (in-memory)
 VALID_TOKENS = set()
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# System prompt for AI (replace with your prompt)
+SYSTEM_PROMPT = "You are a friendly assistant generating menu items for cafes."
 
 # -----------------------------
 # ROUTES
 # -----------------------------
 
+# Serve index.html
 @app.route("/")
 def home():
-    return send_from_directory(".", "index.html")
+    # Get folder where app.py lives
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return send_from_directory(base_dir, "index.html")
 
 
+# Generate menu (requires token)
 @app.route("/generate", methods=["POST"])
 def generate():
     data = request.json
     menu_text = data.get("menu")
-    token = data.get("token")  # user must submit the access token
+    token = data.get("token")
 
+    # Check if user has paid
     if token not in VALID_TOKENS:
         return jsonify({"error": "payment_required"}), 402
 
+    # Call OpenAI
     response = openai.ChatCompletion.create(
         model="gpt-4o-mini",
         messages=[
@@ -43,9 +56,10 @@ def generate():
     return jsonify({"result": response.choices[0].message.content})
 
 
+# Stripe checkout route
 @app.route("/checkout/<plan>")
 def checkout(plan):
-    price_id = os.getenv("PRICE_MONTHLY") if plan == "monthly" else os.getenv("PRICE_YEARLY")
+    price_id = os.environ.get("PRICE_MONTHLY") if plan == "monthly" else os.environ.get("PRICE_YEARLY")
 
     session = stripe.checkout.Session.create(
         payment_method_types=["card"],
@@ -58,6 +72,7 @@ def checkout(plan):
     return redirect(session.url, code=303)
 
 
+# Payment success
 @app.route("/success")
 def success():
     token = os.urandom(8).hex()
@@ -71,6 +86,7 @@ def success():
     """
 
 
+# Payment cancelled
 @app.route("/cancel")
 def cancel():
     return "<h2>Payment cancelled 😕</h2><p>You can try again anytime.</p>"
@@ -83,7 +99,11 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
 
+ 
+
+
 
    
     
+
 
