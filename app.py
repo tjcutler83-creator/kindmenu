@@ -1,109 +1,107 @@
-from flask import Flask, request, jsonify, redirect, send_from_directory
-import stripe
-import openai
 import os
+from flask import Flask, request, jsonify, redirect
+import stripe
+from openai import OpenAI
 
+# ------------------
+# App setup
+# ------------------
 app = Flask(__name__)
 
-# -----------------------------
-# CONFIGURATION
-# -----------------------------
-# Stripe
-stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
+# ------------------
+# Environment variables
+# ------------------
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_PRICE_MONTHLY = os.getenv("STRIPE_PRICE_MONTHLY")
+STRIPE_PRICE_ANNUAL = os.getenv("STRIPE_PRICE_ANNUAL")
 
-# OpenAI
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY not set")
 
-# Token storage (in-memory)
-VALID_TOKENS = set()
+if not STRIPE_SECRET_KEY:
+    raise RuntimeError("STRIPE_SECRET_KEY not set")
 
-# System prompt for AI (replace with your prompt)
-SYSTEM_PROMPT = "You are a friendly assistant generating menu items for cafes."
+if not STRIPE_PRICE_MONTHLY or not STRIPE_PRICE_ANNUAL:
+    raise RuntimeError("Stripe price IDs not set")
 
-# -----------------------------
-# ROUTES
-# -----------------------------
+# ------------------
+# Clients
+# ------------------
+client = OpenAI(api_key=OPENAI_API_KEY)
+stripe.api_key = STRIPE_SECRET_KEY
 
-# Serve index.html
+# ------------------
+# System prompt
+# ------------------
+SYSTEM_PROMPT = """
+You are a helpful assistant that turns restaurant menu ideas
+into a clear, well structured menu with descriptions and pricing suggestions.
+"""
+
+# ------------------
+# Routes
+# ------------------
+
 @app.route("/")
 def home():
-    # Get folder where app.py lives
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    return send_from_directory(base_dir, "index.html")
+    return "KindMenu backend running"
 
-
-# Generate menu (requires token)
+# -------- AI GENERATE --------
 @app.route("/generate", methods=["POST"])
 def generate():
-    data = request.json
-    menu_text = data.get("menu")
-    token = data.get("token")
+    try:
+        data = request.get_json()
+        menu_text = data.get("menu", "")
 
-    # Check if user has paid
-    if token not in VALID_TOKENS:
-        return jsonify({"error": "payment_required"}), 402
+        if not menu_text.strip():
+            return jsonify({"error": "Menu text is required"}), 400
 
-    # Call OpenAI
-    response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": menu_text}
-        ],
-        temperature=0.4
-    )
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": menu_text}
+            ],
+            temperature=0.4
+        )
 
-    return jsonify({"result": response.choices[0].message.content})
+        return jsonify({
+            "result": response.choices[0].message.content
+        })
 
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# Stripe checkout route
+# -------- STRIPE CHECKOUT --------
 @app.route("/checkout/<plan>")
 def checkout(plan):
-    price_id = os.environ.get("PRICE_MONTHLY") if plan == "monthly" else os.environ.get("PRICE_YEARLY")
+    if plan == "monthly":
+        price_id = STRIPE_PRICE_MONTHLY
+    elif plan == "annual":
+        price_id = STRIPE_PRICE_ANNUAL
+    else:
+        return "Invalid plan", 400
 
-    session = stripe.checkout.Session.create(
-        payment_method_types=["card"],
-        mode="subscription",
-        line_items=[{"price": price_id, "quantity": 1}],
-        success_url=request.host_url + "success",
-        cancel_url=request.host_url + "cancel"
-    )
+    try:
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            payment_method_types=["card"],
+            line_items=[{
+                "price": price_id,
+                "quantity": 1
+            }],
+            success_url=request.host_url + "?success=true",
+            cancel_url=request.host_url + "?canceled=true"
+        )
 
-    return redirect(session.url, code=303)
+        return redirect(session.url, code=303)
 
+    except Exception as e:
+        return f"Stripe error: {e}", 500
 
-# Payment success
-@app.route("/success")
-def success():
-    token = os.urandom(8).hex()
-    VALID_TOKENS.add(token)
-
-    return f"""
-    <h2>You're all set ☕</h2>
-    <p>Your access code:</p>
-    <pre>{token}</pre>
-    <p>Paste this into KindMenu to unlock it.</p>
-    """
-
-
-# Payment cancelled
-@app.route("/cancel")
-def cancel():
-    return "<h2>Payment cancelled 😕</h2><p>You can try again anytime.</p>"
-
-
-# -----------------------------
-# RUN SERVER
-# -----------------------------
+# ------------------
+# Run locally
+# ------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-
- 
-
-
-
-   
-    
-
-
+    app.run(host="0.0.0.0", port=5000)
